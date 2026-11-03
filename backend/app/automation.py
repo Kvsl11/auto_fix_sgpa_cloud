@@ -281,6 +281,48 @@ class AutomacaoFicha:
             f"❌ Falha definitiva ao abrir o navegador após múltiplas tentativas: {ultimo_erro}"
         )
 
+    def _diagnostico_pagina(self) -> None:
+        """Registra no log onde o navegador está (ajuda a entender travamentos)."""
+        try:
+            info = self.driver.execute_script(
+                """
+                const sel = '.alert, .error, .toast, .help-block, .text-danger, [role=alert], .SmallBox, .MessageBoxContainer';
+                const msgs = [...document.querySelectorAll(sel)]
+                  .map(e => (e.innerText || '').trim()).filter(Boolean).slice(0, 3);
+                return {url: location.href, title: document.title,
+                        texto: (document.body ? document.body.innerText : '').trim().slice(0, 160),
+                        msgs};
+                """
+            )
+            self.log(f"🔵 Página atual: {info['url']} | título: '{info['title']}'")
+            for m in info.get("msgs") or []:
+                self.log(f"🔴 Mensagem do portal: {m[:200]}")
+            if not info.get("texto"):
+                self.log("⚠️ A página está em branco (o portal ainda está carregando ou não respondeu).")
+        except Exception as e:
+            self.log(f"⚠️ Não foi possível ler a página atual: {_err(e)}")
+
+    def _aguardar_login(self) -> None:
+        """Espera o menu lateral aparecer após o login; se não aparecer, explica o motivo."""
+        timeout = int(os.getenv("LOGIN_TIMEOUT", "90"))
+        self.log("🔵 Aguardando o portal concluir o login...")
+        inicio = time.time()
+        proximo_diag = 20
+        while time.time() - inicio < timeout:
+            self._checar_cancelado()
+            if self.driver.find_elements(By.XPATH, XP["botao_ferramentas"]):
+                self.log("🟢 Login concluído: menu do portal carregado.")
+                return
+            if time.time() - inicio >= proximo_diag:
+                self._diagnostico_pagina()
+                proximo_diag += 20
+            time.sleep(1)
+        self._diagnostico_pagina()
+        raise RuntimeError(
+            f"Login não concluído: o menu do portal não apareceu em {timeout}s. "
+            "Confira usuário/senha ou veja as mensagens acima."
+        )
+
     def _fechar_driver(self) -> None:
         with self._driver_lock:
             if self.driver:
@@ -582,6 +624,7 @@ class AutomacaoFicha:
             self._escrever_texto(XP["usuario"], self.params.usuario)
             self._escrever_texto(XP["senha"], self.params.senha)
             self._clicar_com_js(XP["botao_login"])
+            self._aguardar_login()
             self._clicar_com_js(XP["botao_ferramentas"])
             self._clicar_com_js(XP["botao_ficha_operador"])
 
@@ -620,8 +663,9 @@ class AutomacaoFicha:
             pass
         except Exception as e:
             erro = True
-            self.log("🔴 Erro Crítico: Falha ao iniciar o WebDriver.")
-            self.log(f"🔴 Detalhes do erro: {_err(e)}")
+            if self.driver is None:
+                self.log("🔴 Erro Crítico: Falha ao iniciar o navegador.")
+            self.log(f"🔴 Execução interrompida: {_err(e)}")
         finally:
             self._executando.clear()
             self._fechar_driver()

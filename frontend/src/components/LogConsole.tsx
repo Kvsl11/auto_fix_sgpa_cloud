@@ -79,7 +79,7 @@ export function LogConsole({ logs, connected }: { logs: LogEntry[]; connected: b
           visible.map((l, i) => (
             <div key={i} className="flex gap-3">
               <span className="shrink-0 select-none text-slate-400">{l.ts.slice(11)}</span>
-              <span className={`break-words ${COLORS[l.level]}`}>{l.message}</span>
+              <span className={`min-w-0 break-all ${COLORS[l.level]}`}>{l.message}</span>
             </div>
           ))
         )}
