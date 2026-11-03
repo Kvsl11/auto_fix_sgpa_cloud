@@ -107,6 +107,15 @@ export default function App() {
             <div><strong>Sistema bloqueado.</strong> {system.mensagem}</div>
           </div>
         )}
+        {system && !system.auth_required && (
+          <div className="flex items-start gap-3 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-300">
+            <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0" />
+            <div>
+              <strong>Painel sem senha de acesso.</strong> Qualquer pessoa com este link pode usar o app.
+              Defina a variável <code className="font-mono">APP_PASSWORD</code> no servidor (Render → Environment).
+            </div>
+          </div>
+        )}
         {error && (
           <div className="flex items-center justify-between rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-300">
             {error}

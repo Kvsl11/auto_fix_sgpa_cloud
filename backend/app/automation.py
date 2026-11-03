@@ -12,6 +12,7 @@ Esta é a mesma lógica do `main.py` desktop, reorganizada em uma classe
 
 from __future__ import annotations
 
+import base64
 import os
 import re
 import time
@@ -131,6 +132,8 @@ class AutomacaoFicha:
         self.stats = Estatisticas()
         self.driver: Optional[webdriver.Chrome] = None
         self._driver_lock = threading.Lock()
+        self._shot_lock = threading.Lock()
+        self.ultima_captura: Optional[tuple[bytes, str]] = None
 
         # Equivalentes aos globais do script original
         self._executando = threading.Event()  # executando
@@ -197,15 +200,32 @@ class AutomacaoFicha:
         return self._executando.is_set()
 
     # ------------------------------------------------------ navegador remoto
-    def screenshot_png(self) -> Optional[bytes]:
-        """Captura a tela do navegador remoto (para a pré-visualização ao vivo)."""
-        with self._driver_lock:
-            if not self.driver:
-                return None
+    def screenshot(self) -> Optional[tuple[bytes, str]]:
+        """Captura a tela do navegador remoto (pré-visualização ao vivo).
+
+        Usa JPEG via DevTools (bem mais leve que PNG em servidores lentos) e
+        nunca enfileira capturas: se já houver uma em andamento, devolve a
+        última imagem. A última imagem também fica disponível após o fim.
+        """
+        if not self._shot_lock.acquire(blocking=False):
+            return self.ultima_captura
+        try:
+            drv = self.driver
+            if not drv:
+                return self.ultima_captura
             try:
-                return self.driver.get_screenshot_as_png()
+                data = drv.execute_cdp_cmd(
+                    "Page.captureScreenshot", {"format": "jpeg", "quality": 60}
+                )["data"]
+                self.ultima_captura = (base64.b64decode(data), "image/jpeg")
             except Exception:
-                return None
+                try:
+                    self.ultima_captura = (drv.get_screenshot_as_png(), "image/png")
+                except Exception:
+                    pass
+            return self.ultima_captura
+        finally:
+            self._shot_lock.release()
 
     def clicar_em(self, x_ratio: float, y_ratio: float) -> bool:
         """Clica em um ponto da página (coordenadas relativas 0..1 da captura)."""
@@ -279,6 +299,48 @@ class AutomacaoFicha:
                 time.sleep(2)
         raise RuntimeError(
             f"❌ Falha definitiva ao abrir o navegador após múltiplas tentativas: {ultimo_erro}"
+        )
+
+    def _diagnostico_pagina(self) -> None:
+        """Registra no log onde o navegador está (ajuda a entender travamentos)."""
+        try:
+            info = self.driver.execute_script(
+                """
+                const sel = '.alert, .error, .toast, .help-block, .text-danger, [role=alert], .SmallBox, .MessageBoxContainer';
+                const msgs = [...document.querySelectorAll(sel)]
+                  .map(e => (e.innerText || '').trim()).filter(Boolean).slice(0, 3);
+                return {url: location.href, title: document.title,
+                        texto: (document.body ? document.body.innerText : '').trim().slice(0, 160),
+                        msgs};
+                """
+            )
+            self.log(f"🔵 Página atual: {info['url']} | título: '{info['title']}'")
+            for m in info.get("msgs") or []:
+                self.log(f"🔴 Mensagem do portal: {m[:200]}")
+            if not info.get("texto"):
+                self.log("⚠️ A página está em branco (o portal ainda está carregando ou não respondeu).")
+        except Exception as e:
+            self.log(f"⚠️ Não foi possível ler a página atual: {_err(e)}")
+
+    def _aguardar_login(self) -> None:
+        """Espera o menu lateral aparecer após o login; se não aparecer, explica o motivo."""
+        timeout = int(os.getenv("LOGIN_TIMEOUT", "90"))
+        self.log("🔵 Aguardando o portal concluir o login...")
+        inicio = time.time()
+        proximo_diag = 20
+        while time.time() - inicio < timeout:
+            self._checar_cancelado()
+            if self.driver.find_elements(By.XPATH, XP["botao_ferramentas"]):
+                self.log("🟢 Login concluído: menu do portal carregado.")
+                return
+            if time.time() - inicio >= proximo_diag:
+                self._diagnostico_pagina()
+                proximo_diag += 20
+            time.sleep(1)
+        self._diagnostico_pagina()
+        raise RuntimeError(
+            f"Login não concluído: o menu do portal não apareceu em {timeout}s. "
+            "Confira usuário/senha ou veja as mensagens acima."
         )
 
     def _fechar_driver(self) -> None:
@@ -582,6 +644,7 @@ class AutomacaoFicha:
             self._escrever_texto(XP["usuario"], self.params.usuario)
             self._escrever_texto(XP["senha"], self.params.senha)
             self._clicar_com_js(XP["botao_login"])
+            self._aguardar_login()
             self._clicar_com_js(XP["botao_ferramentas"])
             self._clicar_com_js(XP["botao_ficha_operador"])
 
@@ -620,8 +683,9 @@ class AutomacaoFicha:
             pass
         except Exception as e:
             erro = True
-            self.log("🔴 Erro Crítico: Falha ao iniciar o WebDriver.")
-            self.log(f"🔴 Detalhes do erro: {_err(e)}")
+            if self.driver is None:
+                self.log("🔴 Erro Crítico: Falha ao iniciar o navegador.")
+            self.log(f"🔴 Execução interrompida: {_err(e)}")
         finally:
             self._executando.clear()
             self._fechar_driver()

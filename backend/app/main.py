@@ -9,7 +9,7 @@ Rotas principais
   POST /api/jobs/{id}/pause       -> pausar
   POST /api/jobs/{id}/continue    -> continuar
   POST /api/jobs/{id}/stop        -> encerrar e fechar o navegador
-  GET  /api/jobs/{id}/screenshot  -> imagem PNG do navegador remoto
+  GET  /api/jobs/{id}/screenshot  -> imagem (JPEG) do navegador remoto
   POST /api/jobs/{id}/click       -> clique remoto (x, y relativos)
   POST /api/jobs/{id}/type        -> digitação remota
   WS   /api/jobs/{id}/ws          -> logs / status / estatísticas em tempo real
@@ -220,10 +220,11 @@ async def screenshot(job_id: str, token: Optional[str] = Query(default=None)):
     # <img src> não envia header Authorization -> token via query string
     if not _token_valido(token):
         raise HTTPException(status_code=401, detail="Não autorizado")
-    png = await asyncio.to_thread(_job_or_404(job_id).automacao.screenshot_png)
-    if not png:
+    captura = await asyncio.to_thread(_job_or_404(job_id).automacao.screenshot)
+    if not captura:
         return Response(status_code=204)
-    return Response(content=png, media_type="image/png", headers={"Cache-Control": "no-store"})
+    conteudo, tipo = captura
+    return Response(content=conteudo, media_type=tipo, headers={"Cache-Control": "no-store"})
 
 
 @app.post("/api/jobs/{job_id}/click", dependencies=[Depends(exigir_auth)])
