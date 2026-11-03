@@ -12,6 +12,7 @@ Esta é a mesma lógica do `main.py` desktop, reorganizada em uma classe
 
 from __future__ import annotations
 
+import base64
 import os
 import re
 import time
@@ -131,6 +132,8 @@ class AutomacaoFicha:
         self.stats = Estatisticas()
         self.driver: Optional[webdriver.Chrome] = None
         self._driver_lock = threading.Lock()
+        self._shot_lock = threading.Lock()
+        self.ultima_captura: Optional[tuple[bytes, str]] = None
 
         # Equivalentes aos globais do script original
         self._executando = threading.Event()  # executando
@@ -197,15 +200,32 @@ class AutomacaoFicha:
         return self._executando.is_set()
 
     # ------------------------------------------------------ navegador remoto
-    def screenshot_png(self) -> Optional[bytes]:
-        """Captura a tela do navegador remoto (para a pré-visualização ao vivo)."""
-        with self._driver_lock:
-            if not self.driver:
-                return None
+    def screenshot(self) -> Optional[tuple[bytes, str]]:
+        """Captura a tela do navegador remoto (pré-visualização ao vivo).
+
+        Usa JPEG via DevTools (bem mais leve que PNG em servidores lentos) e
+        nunca enfileira capturas: se já houver uma em andamento, devolve a
+        última imagem. A última imagem também fica disponível após o fim.
+        """
+        if not self._shot_lock.acquire(blocking=False):
+            return self.ultima_captura
+        try:
+            drv = self.driver
+            if not drv:
+                return self.ultima_captura
             try:
-                return self.driver.get_screenshot_as_png()
+                data = drv.execute_cdp_cmd(
+                    "Page.captureScreenshot", {"format": "jpeg", "quality": 60}
+                )["data"]
+                self.ultima_captura = (base64.b64decode(data), "image/jpeg")
             except Exception:
-                return None
+                try:
+                    self.ultima_captura = (drv.get_screenshot_as_png(), "image/png")
+                except Exception:
+                    pass
+            return self.ultima_captura
+        finally:
+            self._shot_lock.release()
 
     def clicar_em(self, x_ratio: float, y_ratio: float) -> bool:
         """Clica em um ponto da página (coordenadas relativas 0..1 da captura)."""

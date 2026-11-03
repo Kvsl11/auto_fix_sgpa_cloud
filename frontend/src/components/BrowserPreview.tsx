@@ -10,22 +10,26 @@ import { api } from "../lib/api";
  */
 export function BrowserPreview({ jobId, active }: { jobId: string | null; active: boolean }) {
   const [src, setSrc] = useState<string | null>(null);
+  const [falhas, setFalhas] = useState(0);
   const [interativo, setInterativo] = useState(false);
   const [texto, setTexto] = useState("");
 
+  useEffect(() => { setSrc(null); setFalhas(0); }, [jobId]);
+
   useEffect(() => {
-    if (!jobId || !active) return;
+    if (!jobId) return;
     let stop = false;
     let timer: number;
     // Pré-carrega a próxima imagem antes de trocar (evita "piscar").
+    // Com a execução encerrada, busca só uma vez para mostrar o último quadro.
     const tick = () => {
       const url = api.screenshotUrl(jobId);
       const img = new Image();
-      img.onload = () => { if (!stop) setSrc(url); schedule(); };
-      img.onerror = schedule;
+      img.onload = () => { if (!stop) { setSrc(url); setFalhas(0); } schedule(); };
+      img.onerror = () => { if (!stop) setFalhas((n) => n + 1); schedule(); };
       img.src = url;
     };
-    const schedule = () => { if (!stop) timer = window.setTimeout(tick, 1500); };
+    const schedule = () => { if (!stop && active) timer = window.setTimeout(tick, 1500); };
     tick();
     return () => { stop = true; window.clearTimeout(timer); };
   }, [jobId, active]);
@@ -68,7 +72,11 @@ export function BrowserPreview({ jobId, active }: { jobId: string | null; active
         ) : (
           <div className="flex h-full flex-col items-center justify-center gap-2 px-6 text-center text-sm text-slate-400">
             <Monitor className="h-8 w-8" />
-            {active ? "Abrindo navegador..." : "A tela do navegador aparecerá aqui durante a execução"}
+            {!active
+              ? "A tela do navegador aparecerá aqui durante a execução"
+              : falhas >= 8
+                ? "Ainda sem imagem do navegador. O servidor pode estar lento ou sem memória; veja o log ao lado."
+                : "Abrindo navegador..."}
           </div>
         )}
       </div>
